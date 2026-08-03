@@ -5,7 +5,7 @@ plugins {
 }
 android {
     namespace = "ru.atol.visitorregistration"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ru.atol.visitorregistration"
@@ -32,7 +32,7 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
