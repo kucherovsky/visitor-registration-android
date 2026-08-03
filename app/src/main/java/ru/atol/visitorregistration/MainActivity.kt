@@ -430,6 +430,9 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Очистить принтеры") }
         }
+        item { Spacer(Modifier.height(10.dp)) }
+        item { Text("О приложении", style = MaterialTheme.typography.headlineSmall) }
+        item { Text("Версия ${BuildConfig.VERSION_NAME} · тестовая сборка") }
     }
 
     if (confirmClearDatabase) {
