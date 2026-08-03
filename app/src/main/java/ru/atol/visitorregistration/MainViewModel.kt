@@ -17,6 +17,7 @@ import ru.atol.visitorregistration.data.local.RoomVisitorRepository
 import ru.atol.visitorregistration.exporting.AndroidAttendanceExporter
 import ru.atol.visitorregistration.importing.AndroidSpreadsheetImporter
 import ru.atol.visitorregistration.model.PrinterConfig
+import ru.atol.visitorregistration.model.PrinterEncoding
 import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorSource
 import ru.atol.visitorregistration.model.VisitorType
@@ -139,11 +140,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun savePrinter(name: String, host: String, port: String, width: String, height: String): Boolean {
-        val printer = printerFromFields(name, host, port, width, height) ?: return false
+    fun savePrinter(
+        name: String,
+        host: String,
+        port: String,
+        width: String,
+        height: String,
+        encoding: PrinterEncoding,
+        fontName: String,
+        existing: PrinterConfig? = null
+    ): Boolean {
+        val printer = printerFromFields(name, host, port, width, height, encoding, fontName, existing) ?: return false
         viewModelScope.launch {
-            printerRepository.save(printer.copy(isDefault = printers.isEmpty()))
-            statusMessage = "Принтер ${printer.name} добавлен"
+            printerRepository.save(printer.copy(isDefault = existing?.isDefault == true || printers.isEmpty()))
+            statusMessage = if (existing == null) "Принтер ${printer.name} добавлен" else "Принтер ${printer.name} обновлён"
         }
         return true
     }
@@ -162,16 +172,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun checkPrinter(name: String, host: String, port: String, width: String, height: String) {
-        val printer = printerFromFields(name, host, port, width, height) ?: return
+    fun checkPrinter(name: String, host: String, port: String, width: String, height: String, encoding: PrinterEncoding, fontName: String) {
+        val printer = printerFromFields(name, host, port, width, height, encoding, fontName) ?: return
         runPrinterAction("Соединение с принтером установлено") {
             printerClient.checkConnection(printer)
         }
     }
 
-    fun testPrint(name: String, host: String, port: String, width: String, height: String) {
-        val printer = printerFromFields(name, host, port, width, height) ?: return
-        runPrinterAction("Тестовая этикетка отправлена") {
+    fun testPrint(name: String, host: String, port: String, width: String, height: String, encoding: PrinterEncoding, fontName: String) {
+        val printer = printerFromFields(name, host, port, width, height, encoding, fontName) ?: return
+        runPrinterAction("Тест четырёх кодировок отправлен") {
             printerClient.printTest(printer)
         }
     }
@@ -189,19 +199,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         host: String,
         port: String,
         width: String,
-        height: String
+        height: String,
+        encoding: PrinterEncoding,
+        fontName: String,
+        existing: PrinterConfig? = null
     ): PrinterConfig? {
         if (host.isBlank()) {
             statusMessage = "Укажите IP-адрес принтера"
             return null
         }
         return PrinterConfig(
+            id = existing?.id ?: java.util.UUID.randomUUID().toString(),
             name = name.trim().ifBlank { "Основной принтер" },
             host = host.trim(),
             port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: 9100,
             widthMm = width.toIntOrNull()?.takeIf { it > 0 } ?: 58,
             heightMm = height.toIntOrNull()?.takeIf { it > 0 } ?: 40,
-            isDefault = false
+            encoding = encoding,
+            fontName = fontName.trim().ifBlank { "3" },
+            isDefault = existing?.isDefault ?: false
         )
     }
 

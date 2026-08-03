@@ -35,5 +35,14 @@ data class PrinterConfig(
     val port: Int = 9100,
     val widthMm: Int = 58,
     val heightMm: Int = 40,
+    val encoding: PrinterEncoding = PrinterEncoding.WINDOWS_1251,
+    val fontName: String = "3",
     val isDefault: Boolean = false
 )
+
+enum class PrinterEncoding(val title: String, val codePage: String, val charsetName: String) {
+    WINDOWS_1251("Windows-1251", "1251", "windows-1251"),
+    CP866("CP866", "866", "IBM866"),
+    ISO_8859_5("ISO-8859-5", "8859-5", "ISO-8859-5"),
+    UTF_8("UTF-8", "UTF-8", "UTF-8")
+}

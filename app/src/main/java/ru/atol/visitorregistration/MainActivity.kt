@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.time.LocalDate
 import ru.atol.visitorregistration.model.PrinterConfig
+import ru.atol.visitorregistration.model.PrinterEncoding
 import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorType
 
@@ -200,6 +201,9 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     var port by remember { mutableStateOf("9100") }
     var width by remember { mutableStateOf("58") }
     var height by remember { mutableStateOf("40") }
+    var encoding by remember { mutableStateOf(PrinterEncoding.WINDOWS_1251) }
+    var fontName by remember { mutableStateOf("3") }
+    var editingPrinter by remember { mutableStateOf<PrinterConfig?>(null) }
     var confirmClearDatabase by remember { mutableStateOf(false) }
     var confirmClearPrinters by remember { mutableStateOf(false) }
     var printerToDelete by remember { mutableStateOf<PrinterConfig?>(null) }
@@ -282,12 +286,26 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(printer.name, style = MaterialTheme.typography.titleMedium)
                         Text("${printer.host}:${printer.port} · ${printer.widthMm}×${printer.heightMm} мм")
+                        Text("Кодировка: ${printer.encoding.title}")
+                        Text("Шрифт TSPL: ${printer.fontName}")
                         if (printer.isDefault) Text("Основной принтер")
+                        if (!printer.isDefault) {
+                            OutlinedButton(onClick = { vm.setDefaultPrinter(printer.id) }) {
+                                Text("Сделать основным")
+                            }
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!printer.isDefault) {
-                                OutlinedButton(onClick = { vm.setDefaultPrinter(printer.id) }) {
-                                    Text("Сделать основным")
-                                }
+                            OutlinedButton(onClick = {
+                                editingPrinter = printer
+                                printerName = printer.name
+                                host = printer.host
+                                port = printer.port.toString()
+                                width = printer.widthMm.toString()
+                                height = printer.heightMm.toString()
+                                encoding = printer.encoding
+                                fontName = printer.fontName
+                            }) {
+                                Text("Изменить")
                             }
                             OutlinedButton(
                                 onClick = { printerToDelete = printer },
@@ -299,7 +317,12 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             }
         }
 
-        item { Text("Добавить принтер", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            Text(
+                if (editingPrinter == null) "Добавить принтер" else "Изменить принтер",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        }
         item { TextFieldRow("Название принтера", printerName) { printerName = it } }
         item { TextFieldRow("IP-адрес", host) { host = it } }
         item { TextFieldRow("Порт", port) { port = it } }
@@ -322,14 +345,35 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             }
         }
         item {
+            Text("Кодировка русского текста")
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                PrinterEncoding.entries.chunked(2).forEach { encodings ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        encodings.forEach { value ->
+                            FilterChip(
+                                selected = encoding == value,
+                                onClick = { encoding = value },
+                                label = { Text(value.title) }
+                            )
+                        }
+                    }
+                }
+            }
+            Text("Тестовая печать выведет русскую строку во всех четырёх вариантах. Выберите тот, который напечатался правильно.")
+        }
+        item {
+            TextFieldRow("Имя шрифта TSPL", fontName) { fontName = it }
+            Text("Например: 1–8 для встроенного шрифта или имя файла шрифта, загруженного в принтер.")
+        }
+        item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
-                    onClick = { vm.checkPrinter(printerName, host, port, width, height) },
+                    onClick = { vm.checkPrinter(printerName, host, port, width, height, encoding, fontName) },
                     enabled = !vm.printerBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("Проверить") }
                 Button(
-                    onClick = { vm.testPrint(printerName, host, port, width, height) },
+                    onClick = { vm.testPrint(printerName, host, port, width, height, encoding, fontName) },
                     enabled = !vm.printerBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("Тестовая печать") }
@@ -338,16 +382,36 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         item {
             Button(
                 onClick = {
-                    if (vm.savePrinter(printerName, host, port, width, height)) {
+                    if (vm.savePrinter(printerName, host, port, width, height, encoding, fontName, editingPrinter)) {
+                        editingPrinter = null
                         printerName = ""
                         host = ""
                         port = "9100"
                         width = "58"
                         height = "40"
+                        encoding = PrinterEncoding.WINDOWS_1251
+                        fontName = "3"
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Добавить принтер") }
+            ) { Text(if (editingPrinter == null) "Добавить принтер" else "Сохранить изменения") }
+        }
+        if (editingPrinter != null) {
+            item {
+                OutlinedButton(
+                    onClick = {
+                        editingPrinter = null
+                        printerName = ""
+                        host = ""
+                        port = "9100"
+                        width = "58"
+                        height = "40"
+                        encoding = PrinterEncoding.WINDOWS_1251
+                        fontName = "3"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Отменить редактирование") }
+            }
         }
         item { Spacer(Modifier.height(10.dp)) }
         item { Text("Очистка данных", style = MaterialTheme.typography.headlineSmall) }
