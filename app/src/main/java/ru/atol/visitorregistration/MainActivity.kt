@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -112,7 +114,7 @@ private fun RegistrationScreen(vm: MainViewModel, modifier: Modifier = Modifier)
             vm.searchResults.isEmpty() -> Text("Посетитель не найден. Добавьте его вручную.")
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(vm.searchResults, key = { it.id }) { visitor ->
-                    VisitorCard(visitor = visitor, onCheckIn = { vm.checkIn(visitor) })
+                    VisitorCard(visitor = visitor, onCheckIn = { vm.checkInAndPrint(visitor) })
                 }
             }
         }
@@ -126,8 +128,15 @@ private fun VisitorCard(visitor: Visitor, onCheckIn: () -> Unit) {
             Text(visitor.fullName, style = MaterialTheme.typography.titleLarge)
             Text(listOf(visitor.company, visitor.position, visitor.city).filter { it.isNotBlank() }.joinToString(" · "))
             Text("${visitor.type.title} · ${visitor.source.title}")
-            Button(onClick = onCheckIn, enabled = visitor.checkedInAt == null) {
-                Text(if (visitor.checkedInAt == null) "Зарегистрировать" else "Уже зарегистрирован")
+            if (visitor.checkedInAt == null) {
+                Button(onClick = onCheckIn) {
+                    Text("Зарегистрировать и напечатать")
+                }
+            } else {
+                Text("Посетитель уже зарегистрирован")
+                OutlinedButton(onClick = onCheckIn) {
+                    Text("Повторная печать")
+                }
             }
         }
     }
@@ -185,10 +194,15 @@ private fun TextFieldRow(label: String, value: String, onValueChange: (String) -
 
 @Composable
 private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
+    var printerName by remember(vm.printerConfig.name) { mutableStateOf(vm.printerConfig.name) }
     var host by remember(vm.printerConfig.host) { mutableStateOf(vm.printerConfig.host) }
     var port by remember(vm.printerConfig.port) { mutableStateOf(vm.printerConfig.port.toString()) }
+    var width by remember(vm.printerConfig.widthMm) { mutableStateOf(vm.printerConfig.widthMm.toString()) }
+    var height by remember(vm.printerConfig.heightMm) { mutableStateOf(vm.printerConfig.heightMm.toString()) }
+    var confirmClearDatabase by remember { mutableStateOf(false) }
+    var confirmClearPrinters by remember { mutableStateOf(false) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        vm.selectedFileName = uri?.lastPathSegment
+        if (uri != null) vm.importFile(uri)
     }
 
     LazyColumn(
@@ -208,32 +222,119 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             }
         }
         item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ImportMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = vm.importMode == mode,
+                        onClick = { vm.importMode = mode },
+                        label = { Text(mode.title) }
+                    )
+                }
+            }
+        }
+        item {
             OutlinedButton(
                 onClick = { filePicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) },
+                enabled = !vm.importBusy,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Выбрать Excel-файл")
+                Text(if (vm.importBusy) "Загрузка…" else "Выбрать и загрузить Excel-файл")
             }
         }
         vm.selectedFileName?.let { name -> item { Text("Выбран файл: $name") } }
+        vm.lastImportResult?.let { result ->
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Загружено записей: ${result.imported}", style = MaterialTheme.typography.titleMedium)
+                        result.warnings.forEach { warning -> Text("• $warning") }
+                    }
+                }
+            }
+        }
 
         item { Spacer(Modifier.height(10.dp)) }
         item { Text("Принтер", style = MaterialTheme.typography.headlineSmall) }
+        item { TextFieldRow("Название принтера", printerName) { printerName = it } }
         item { TextFieldRow("IP-адрес", host) { host = it } }
         item { TextFieldRow("Порт", port) { port = it } }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = width,
+                    onValueChange = { width = it },
+                    label = { Text("Ширина, мм") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = height,
+                    onValueChange = { height = it },
+                    label = { Text("Высота, мм") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
-                    onClick = { vm.updatePrinter(host, port); vm.checkPrinter() },
+                    onClick = { vm.updatePrinter(printerName, host, port, width, height); vm.checkPrinter() },
                     enabled = !vm.printerBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("Проверить") }
                 Button(
-                    onClick = { vm.updatePrinter(host, port); vm.testPrint() },
+                    onClick = { vm.updatePrinter(printerName, host, port, width, height); vm.testPrint() },
                     enabled = !vm.printerBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("Тестовая печать") }
             }
         }
+        item { Spacer(Modifier.height(10.dp)) }
+        item { Text("Очистка данных", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            OutlinedButton(
+                onClick = { confirmClearDatabase = true },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Очистить базу посетителей") }
+        }
+        item {
+            OutlinedButton(
+                onClick = { confirmClearPrinters = true },
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Очистить принтеры") }
+        }
+    }
+
+    if (confirmClearDatabase) {
+        AlertDialog(
+            onDismissRequest = { confirmClearDatabase = false },
+            title = { Text("Очистить базу?") },
+            text = { Text("Будут удалены все посетители и история регистраций. Отменить это действие нельзя.") },
+            confirmButton = {
+                Button(
+                    onClick = { confirmClearDatabase = false; vm.clearDatabase() },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Очистить") }
+            },
+            dismissButton = { OutlinedButton(onClick = { confirmClearDatabase = false }) { Text("Отмена") } }
+        )
+    }
+
+    if (confirmClearPrinters) {
+        AlertDialog(
+            onDismissRequest = { confirmClearPrinters = false },
+            title = { Text("Очистить принтеры?") },
+            text = { Text("Сохранённые IP-адрес, порт и размер этикетки будут сброшены.") },
+            confirmButton = {
+                Button(
+                    onClick = { confirmClearPrinters = false; vm.clearPrinters() },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Очистить") }
+            },
+            dismissButton = { OutlinedButton(onClick = { confirmClearPrinters = false }) { Text("Отмена") } }
+        )
     }
 }

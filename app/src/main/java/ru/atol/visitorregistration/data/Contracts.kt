@@ -7,19 +7,25 @@ import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorType
 
 data class ImportResult(
-    val imported: Int,
+    val visitors: List<Visitor>,
     val skipped: Int,
     val warnings: List<String>
-)
+) {
+    val imported: Int get() = visitors.size
+}
 
 interface VisitorRepository {
     fun observeAll(): Flow<List<Visitor>>
     suspend fun save(visitor: Visitor)
+    suspend fun saveAll(visitors: List<Visitor>)
     suspend fun checkIn(visitorId: String): Visitor
+    suspend fun markPrinted(visitorId: String)
     suspend fun replaceImported(type: VisitorType, visitors: List<Visitor>)
+    suspend fun clearAll()
 }
+
 interface SpreadsheetImporter {
-    suspend fun import(uri: Uri, type: VisitorType): ImportResult
+    suspend fun read(uri: Uri, type: VisitorType): ImportResult
 }
 
 interface PrinterService {

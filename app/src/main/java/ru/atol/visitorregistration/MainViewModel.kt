@@ -1,28 +1,57 @@
 package ru.atol.visitorregistration
 
+import android.app.Application
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import ru.atol.visitorregistration.data.ImportResult
+import ru.atol.visitorregistration.data.local.AppDatabase
+import ru.atol.visitorregistration.data.local.PrinterPreferences
+import ru.atol.visitorregistration.data.local.RoomVisitorRepository
+import ru.atol.visitorregistration.importing.AndroidSpreadsheetImporter
 import ru.atol.visitorregistration.model.PrinterConfig
 import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorSource
 import ru.atol.visitorregistration.model.VisitorType
 import ru.atol.visitorregistration.printing.TsplPrinterClient
 
-class MainViewModel : ViewModel() {
-    private val printerClient = TsplPrinterClient()
-    private val visitors = mutableStateListOf<Visitor>()
+enum class ImportMode(val title: String) {
+    REPLACE("Заменить список"),
+    APPEND("Добавить к списку")
+}
 
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = RoomVisitorRepository(AppDatabase.get(application))
+    private val importer = AndroidSpreadsheetImporter(application)
+    private val printerClient = TsplPrinterClient()
+    private val printerPreferences = PrinterPreferences(application)
+
+    var visitors by mutableStateOf<List<Visitor>>(emptyList())
+        private set
     var searchQuery by mutableStateOf("")
     var selectedImportType by mutableStateOf(VisitorType.PARTNER)
+    var importMode by mutableStateOf(ImportMode.REPLACE)
     var selectedFileName by mutableStateOf<String?>(null)
-    var printerConfig by mutableStateOf(PrinterConfig())
+    var lastImportResult by mutableStateOf<ImportResult?>(null)
+    var printerConfig by mutableStateOf(printerPreferences.load())
+        private set
     var statusMessage by mutableStateOf<String?>(null)
     var printerBusy by mutableStateOf(false)
+        private set
+    var importBusy by mutableStateOf(false)
+        private set
+
+    init {
+        viewModelScope.launch {
+            repository.observeAll().collectLatest { visitors = it }
+        }
+    }
 
     val searchResults: List<Visitor>
         get() {
@@ -33,6 +62,36 @@ class MainViewModel : ViewModel() {
                     it.firstName.contains(query, ignoreCase = true)
             }
         }
+
+    fun importFile(uri: Uri) {
+        if (importBusy) return
+        val type = selectedImportType
+        val mode = importMode
+        selectedFileName = displayName(uri)
+        importBusy = true
+        lastImportResult = null
+        statusMessage = "Загружаем список…"
+        viewModelScope.launch {
+            runCatching {
+                val result = importer.read(uri, type)
+                if (mode == ImportMode.REPLACE) {
+                    repository.replaceImported(type, result.visitors)
+                } else {
+                    repository.saveAll(result.visitors)
+                }
+                result
+            }
+                .onSuccess { result ->
+                    lastImportResult = result
+                    statusMessage = buildString {
+                        append("Загружено записей: ${result.imported}")
+                        if (result.warnings.isNotEmpty()) append(". ${result.warnings.joinToString("; ")}")
+                    }
+                }
+                .onFailure { error -> statusMessage = "Ошибка загрузки: ${error.message ?: "неверный файл"}" }
+            importBusy = false
+        }
+    }
 
     fun addVisitor(
         lastName: String,
@@ -56,20 +115,30 @@ class MainViewModel : ViewModel() {
             source = VisitorSource.MANUAL,
             checkedInAt = System.currentTimeMillis()
         )
-        visitors += visitor
-        statusMessage = "${visitor.fullName} добавлен и зарегистрирован"
+        viewModelScope.launch {
+            repository.save(visitor)
+            printAfterRegistration(visitor, "${visitor.fullName} добавлен и зарегистрирован")
+        }
         return true
     }
 
-    fun checkIn(visitor: Visitor) {
-        val index = visitors.indexOfFirst { it.id == visitor.id }
-        if (index < 0) return
-        visitors[index] = visitor.copy(checkedInAt = visitor.checkedInAt ?: System.currentTimeMillis())
-        statusMessage = "${visitor.fullName} зарегистрирован"
+    fun checkInAndPrint(visitor: Visitor) {
+        if (printerBusy) return
+        viewModelScope.launch {
+            val checkedIn = repository.checkIn(visitor.id)
+            printAfterRegistration(checkedIn, "${visitor.fullName} зарегистрирован")
+        }
     }
 
-    fun updatePrinter(host: String, port: String) {
-        printerConfig = printerConfig.copy(host = host.trim(), port = port.toIntOrNull() ?: 9100)
+    fun updatePrinter(name: String, host: String, port: String, width: String, height: String) {
+        printerConfig = PrinterConfig(
+            name = name.trim().ifBlank { "Основной принтер" },
+            host = host.trim(),
+            port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: 9100,
+            widthMm = width.toIntOrNull()?.takeIf { it > 0 } ?: 58,
+            heightMm = height.toIntOrNull()?.takeIf { it > 0 } ?: 40
+        )
+        printerPreferences.save(printerConfig)
     }
 
     fun checkPrinter() = runPrinterAction("Соединение с принтером установлено") {
@@ -78,6 +147,37 @@ class MainViewModel : ViewModel() {
 
     fun testPrint() = runPrinterAction("Тестовая этикетка отправлена") {
         printerClient.printTest(printerConfig)
+    }
+
+    fun clearDatabase() {
+        viewModelScope.launch {
+            repository.clearAll()
+            searchQuery = ""
+            lastImportResult = null
+            selectedFileName = null
+            statusMessage = "База посетителей очищена"
+        }
+    }
+
+    fun clearPrinters() {
+        printerPreferences.clear()
+        printerConfig = PrinterConfig()
+        statusMessage = "Настройки принтеров очищены"
+    }
+
+    private suspend fun printAfterRegistration(visitor: Visitor, registrationMessage: String) {
+        if (printerConfig.host.isBlank()) {
+            statusMessage = "$registrationMessage. Принтер не настроен"
+            return
+        }
+        printerBusy = true
+        val result = printerClient.printBadge(printerConfig, visitor)
+        result.onSuccess { repository.markPrinted(visitor.id) }
+        statusMessage = result.fold(
+            onSuccess = { "$registrationMessage, этикетка напечатана" },
+            onFailure = { "$registrationMessage. Ошибка печати: ${it.message ?: "нет соединения"}" }
+        )
+        printerBusy = false
     }
 
     private fun runPrinterAction(successMessage: String, action: suspend () -> Result<Unit>) {
@@ -93,4 +193,11 @@ class MainViewModel : ViewModel() {
             printerBusy = false
         }
     }
+
+    private fun displayName(uri: Uri): String = getApplication<Application>().contentResolver
+        .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+        ?: uri.lastPathSegment.orEmpty()
 }
