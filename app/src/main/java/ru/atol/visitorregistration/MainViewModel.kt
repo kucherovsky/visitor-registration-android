@@ -12,8 +12,9 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import ru.atol.visitorregistration.data.ImportResult
 import ru.atol.visitorregistration.data.local.AppDatabase
-import ru.atol.visitorregistration.data.local.PrinterPreferences
+import ru.atol.visitorregistration.data.local.RoomPrinterRepository
 import ru.atol.visitorregistration.data.local.RoomVisitorRepository
+import ru.atol.visitorregistration.exporting.AndroidAttendanceExporter
 import ru.atol.visitorregistration.importing.AndroidSpreadsheetImporter
 import ru.atol.visitorregistration.model.PrinterConfig
 import ru.atol.visitorregistration.model.Visitor
@@ -27,10 +28,12 @@ enum class ImportMode(val title: String) {
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = RoomVisitorRepository(AppDatabase.get(application))
+    private val database = AppDatabase.get(application)
+    private val repository = RoomVisitorRepository(database)
+    private val printerRepository = RoomPrinterRepository(database)
     private val importer = AndroidSpreadsheetImporter(application)
+    private val exporter = AndroidAttendanceExporter(application)
     private val printerClient = TsplPrinterClient()
-    private val printerPreferences = PrinterPreferences(application)
 
     var visitors by mutableStateOf<List<Visitor>>(emptyList())
         private set
@@ -39,7 +42,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var importMode by mutableStateOf(ImportMode.REPLACE)
     var selectedFileName by mutableStateOf<String?>(null)
     var lastImportResult by mutableStateOf<ImportResult?>(null)
-    var printerConfig by mutableStateOf(printerPreferences.load())
+    var printers by mutableStateOf<List<PrinterConfig>>(emptyList())
         private set
     var statusMessage by mutableStateOf<String?>(null)
     var printerBusy by mutableStateOf(false)
@@ -50,6 +53,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch {
             repository.observeAll().collectLatest { visitors = it }
+        }
+        viewModelScope.launch {
+            printerRepository.observeAll().collectLatest { printers = it }
         }
     }
 
@@ -62,6 +68,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.firstName.contains(query, ignoreCase = true)
             }
         }
+
+    val checkedInCount: Int get() = visitors.count { it.checkedInAt != null }
+    val activePrinter: PrinterConfig? get() = printers.firstOrNull { it.isDefault } ?: printers.firstOrNull()
 
     fun importFile(uri: Uri) {
         if (importBusy) return
@@ -130,23 +139,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updatePrinter(name: String, host: String, port: String, width: String, height: String) {
-        printerConfig = PrinterConfig(
+    fun savePrinter(name: String, host: String, port: String, width: String, height: String): Boolean {
+        val printer = printerFromFields(name, host, port, width, height) ?: return false
+        viewModelScope.launch {
+            printerRepository.save(printer.copy(isDefault = printers.isEmpty()))
+            statusMessage = "Принтер ${printer.name} добавлен"
+        }
+        return true
+    }
+
+    fun setDefaultPrinter(printerId: String) {
+        viewModelScope.launch {
+            printerRepository.setDefault(printerId)
+            statusMessage = "Основной принтер выбран"
+        }
+    }
+
+    fun deletePrinter(printerId: String) {
+        viewModelScope.launch {
+            printerRepository.delete(printerId)
+            statusMessage = "Принтер удалён"
+        }
+    }
+
+    fun checkPrinter(name: String, host: String, port: String, width: String, height: String) {
+        val printer = printerFromFields(name, host, port, width, height) ?: return
+        runPrinterAction("Соединение с принтером установлено") {
+            printerClient.checkConnection(printer)
+        }
+    }
+
+    fun testPrint(name: String, host: String, port: String, width: String, height: String) {
+        val printer = printerFromFields(name, host, port, width, height) ?: return
+        runPrinterAction("Тестовая этикетка отправлена") {
+            printerClient.printTest(printer)
+        }
+    }
+
+    fun exportAttendance(uri: Uri) {
+        viewModelScope.launch {
+            runCatching { exporter.write(uri, visitors) }
+                .onSuccess { count -> statusMessage = "В Excel выгружено посетителей: $count" }
+                .onFailure { error -> statusMessage = "Ошибка выгрузки: ${error.message ?: "не удалось создать файл"}" }
+        }
+    }
+
+    private fun printerFromFields(
+        name: String,
+        host: String,
+        port: String,
+        width: String,
+        height: String
+    ): PrinterConfig? {
+        if (host.isBlank()) {
+            statusMessage = "Укажите IP-адрес принтера"
+            return null
+        }
+        return PrinterConfig(
             name = name.trim().ifBlank { "Основной принтер" },
             host = host.trim(),
             port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: 9100,
             widthMm = width.toIntOrNull()?.takeIf { it > 0 } ?: 58,
-            heightMm = height.toIntOrNull()?.takeIf { it > 0 } ?: 40
+            heightMm = height.toIntOrNull()?.takeIf { it > 0 } ?: 40,
+            isDefault = false
         )
-        printerPreferences.save(printerConfig)
-    }
-
-    fun checkPrinter() = runPrinterAction("Соединение с принтером установлено") {
-        printerClient.checkConnection(printerConfig)
-    }
-
-    fun testPrint() = runPrinterAction("Тестовая этикетка отправлена") {
-        printerClient.printTest(printerConfig)
     }
 
     fun clearDatabase() {
@@ -160,18 +216,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearPrinters() {
-        printerPreferences.clear()
-        printerConfig = PrinterConfig()
-        statusMessage = "Настройки принтеров очищены"
+        viewModelScope.launch {
+            printerRepository.clearAll()
+            statusMessage = "Все принтеры удалены"
+        }
     }
 
     private suspend fun printAfterRegistration(visitor: Visitor, registrationMessage: String) {
-        if (printerConfig.host.isBlank()) {
+        val printer = activePrinter
+        if (printer == null) {
             statusMessage = "$registrationMessage. Принтер не настроен"
             return
         }
         printerBusy = true
-        val result = printerClient.printBadge(printerConfig, visitor)
+        val result = printerClient.printBadge(printer, visitor)
         result.onSuccess { repository.markPrinted(visitor.id) }
         statusMessage = result.fold(
             onSuccess = { "$registrationMessage, этикетка напечатана" },

@@ -28,6 +28,18 @@ interface SpreadsheetImporter {
     suspend fun read(uri: Uri, type: VisitorType): ImportResult
 }
 
+interface AttendanceExporter {
+    suspend fun write(uri: Uri, visitors: List<Visitor>): Int
+}
+
+interface PrinterRepository {
+    fun observeAll(): Flow<List<PrinterConfig>>
+    suspend fun save(printer: PrinterConfig)
+    suspend fun setDefault(printerId: String)
+    suspend fun delete(printerId: String)
+    suspend fun clearAll()
+}
+
 interface PrinterService {
     suspend fun checkConnection(config: PrinterConfig): Result<Unit>
     suspend fun printTest(config: PrinterConfig): Result<Unit>

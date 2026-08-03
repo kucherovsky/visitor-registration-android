@@ -40,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import java.time.LocalDate
+import ru.atol.visitorregistration.model.PrinterConfig
 import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorType
 
@@ -193,15 +195,21 @@ private fun TextFieldRow(label: String, value: String, onValueChange: (String) -
 
 @Composable
 private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
-    var printerName by remember(vm.printerConfig.name) { mutableStateOf(vm.printerConfig.name) }
-    var host by remember(vm.printerConfig.host) { mutableStateOf(vm.printerConfig.host) }
-    var port by remember(vm.printerConfig.port) { mutableStateOf(vm.printerConfig.port.toString()) }
-    var width by remember(vm.printerConfig.widthMm) { mutableStateOf(vm.printerConfig.widthMm.toString()) }
-    var height by remember(vm.printerConfig.heightMm) { mutableStateOf(vm.printerConfig.heightMm.toString()) }
+    var printerName by remember { mutableStateOf("") }
+    var host by remember { mutableStateOf("") }
+    var port by remember { mutableStateOf("9100") }
+    var width by remember { mutableStateOf("58") }
+    var height by remember { mutableStateOf("40") }
     var confirmClearDatabase by remember { mutableStateOf(false) }
     var confirmClearPrinters by remember { mutableStateOf(false) }
+    var printerToDelete by remember { mutableStateOf<PrinterConfig?>(null) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importFile(uri)
+    }
+    val exportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    ) { uri ->
+        if (uri != null) vm.exportAttendance(uri)
     }
 
     LazyColumn(
@@ -253,7 +261,45 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         }
 
         item { Spacer(Modifier.height(10.dp)) }
-        item { Text("Принтер", style = MaterialTheme.typography.headlineSmall) }
+        item { Text("Выгрузка результатов", style = MaterialTheme.typography.headlineSmall) }
+        item { Text("Зарегистрировано посетителей: ${vm.checkedInCount}") }
+        item {
+            Button(
+                onClick = { exportPicker.launch("пришедшие_${LocalDate.now()}.xlsx") },
+                enabled = vm.checkedInCount > 0,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Выгрузить пришедших в Excel") }
+        }
+
+        item { Spacer(Modifier.height(10.dp)) }
+        item { Text("Сохранённые принтеры", style = MaterialTheme.typography.headlineSmall) }
+        if (vm.printers.isEmpty()) {
+            item { Text("Принтеры пока не добавлены") }
+        }
+        vm.printers.forEach { printer ->
+            item(key = printer.id) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(printer.name, style = MaterialTheme.typography.titleMedium)
+                        Text("${printer.host}:${printer.port} · ${printer.widthMm}×${printer.heightMm} мм")
+                        if (printer.isDefault) Text("Основной принтер")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (!printer.isDefault) {
+                                OutlinedButton(onClick = { vm.setDefaultPrinter(printer.id) }) {
+                                    Text("Сделать основным")
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { printerToDelete = printer },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            ) { Text("Удалить") }
+                        }
+                    }
+                }
+            }
+        }
+
+        item { Text("Добавить принтер", style = MaterialTheme.typography.headlineSmall) }
         item { TextFieldRow("Название принтера", printerName) { printerName = it } }
         item { TextFieldRow("IP-адрес", host) { host = it } }
         item { TextFieldRow("Порт", port) { port = it } }
@@ -278,16 +324,30 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
-                    onClick = { vm.updatePrinter(printerName, host, port, width, height); vm.checkPrinter() },
+                    onClick = { vm.checkPrinter(printerName, host, port, width, height) },
                     enabled = !vm.printerBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("Проверить") }
                 Button(
-                    onClick = { vm.updatePrinter(printerName, host, port, width, height); vm.testPrint() },
+                    onClick = { vm.testPrint(printerName, host, port, width, height) },
                     enabled = !vm.printerBusy,
                     modifier = Modifier.weight(1f)
                 ) { Text("Тестовая печать") }
             }
+        }
+        item {
+            Button(
+                onClick = {
+                    if (vm.savePrinter(printerName, host, port, width, height)) {
+                        printerName = ""
+                        host = ""
+                        port = "9100"
+                        width = "58"
+                        height = "40"
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Добавить принтер") }
         }
         item { Spacer(Modifier.height(10.dp)) }
         item { Text("Очистка данных", style = MaterialTheme.typography.headlineSmall) }
@@ -301,6 +361,7 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         item {
             OutlinedButton(
                 onClick = { confirmClearPrinters = true },
+                enabled = vm.printers.isNotEmpty(),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 modifier = Modifier.fillMaxWidth()
             ) { Text("Очистить принтеры") }
@@ -326,7 +387,7 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         AlertDialog(
             onDismissRequest = { confirmClearPrinters = false },
             title = { Text("Очистить принтеры?") },
-            text = { Text("Сохранённые IP-адрес, порт и размер этикетки будут сброшены.") },
+            text = { Text("Все сохранённые принтеры и их настройки будут удалены.") },
             confirmButton = {
                 Button(
                     onClick = { confirmClearPrinters = false; vm.clearPrinters() },
@@ -334,6 +395,21 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 ) { Text("Очистить") }
             },
             dismissButton = { OutlinedButton(onClick = { confirmClearPrinters = false }) { Text("Отмена") } }
+        )
+    }
+
+    printerToDelete?.let { printer ->
+        AlertDialog(
+            onDismissRequest = { printerToDelete = null },
+            title = { Text("Удалить принтер?") },
+            text = { Text("Принтер ${printer.name} будет удалён из приложения.") },
+            confirmButton = {
+                Button(
+                    onClick = { printerToDelete = null; vm.deletePrinter(printer.id) },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Удалить") }
+            },
+            dismissButton = { OutlinedButton(onClick = { printerToDelete = null }) { Text("Отмена") } }
         )
     }
 }

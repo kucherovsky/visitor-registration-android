@@ -29,9 +29,11 @@ data class Visitor(
 }
 
 data class PrinterConfig(
+    val id: String = UUID.randomUUID().toString(),
     val name: String = "Основной принтер",
     val host: String = "",
     val port: Int = 9100,
     val widthMm: Int = 58,
-    val heightMm: Int = 40
+    val heightMm: Int = 40,
+    val isDefault: Boolean = false
 )
