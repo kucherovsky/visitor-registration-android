@@ -8,9 +8,12 @@ import kotlinx.coroutines.withContext
 import ru.atol.visitorregistration.data.PrinterService
 import ru.atol.visitorregistration.model.PrinterConfig
 import ru.atol.visitorregistration.model.PrinterEncoding
+import ru.atol.visitorregistration.model.LabelTemplate
 import ru.atol.visitorregistration.model.Visitor
 
-class TsplPrinterClient : PrinterService {
+class TsplPrinterClient(
+    private val templateEngine: TsplTemplateEngine = TsplTemplateEngine()
+) : PrinterService {
     override suspend fun checkConnection(config: PrinterConfig): Result<Unit> = runCatching {
         require(config.host.isNotBlank()) { "Укажите IP-адрес принтера" }
         withContext(Dispatchers.IO) {
@@ -20,15 +23,17 @@ class TsplPrinterClient : PrinterService {
         }
     }
 
-    override suspend fun printTest(config: PrinterConfig): Result<Unit> = runCatching {
+    override suspend fun printTest(config: PrinterConfig, template: LabelTemplate): Result<Unit> = runCatching {
         val command = ByteArrayOutputStream().apply {
-            appendHeader(config)
+            appendHeader(template)
+            val dotsPerMm = template.resolution.dpi / 25.4f
+            val font = template.lines.firstOrNull { it.visible }?.fontName?.ifBlank { "3" } ?: "3"
             PrinterEncoding.entries.forEachIndexed { index, encoding ->
                 appendText(
                     encoding = encoding,
-                    x = 24,
-                    y = 20 + index * 58,
-                    font = config.fontName,
+                    x = (3f * dotsPerMm).toInt(),
+                    y = ((3f + index * 10f) * dotsPerMm).toInt(),
+                    font = font,
                     text = "${encoding.title}: ТЕСТ ЯЁЙ"
                 )
             }
@@ -37,19 +42,14 @@ class TsplPrinterClient : PrinterService {
         sendBytes(config, command).getOrThrow()
     }
 
-    override suspend fun printBadge(config: PrinterConfig, visitor: Visitor): Result<Unit> = runCatching {
-        val command = ByteArrayOutputStream().apply {
-            appendHeader(config)
-            appendText(config.encoding, 24, 24, config.fontName, visitor.fullName)
-            appendText(config.encoding, 24, 82, config.fontName, visitor.company)
-            appendText(config.encoding, 24, 126, config.fontName, visitor.position)
-            appendAscii("PRINT 1,1\r\n")
-        }.toByteArray()
+    override suspend fun printBadge(config: PrinterConfig, visitor: Visitor, template: LabelTemplate): Result<Unit> = runCatching {
+        val command = templateEngine.printBytes(template, visitor, config.encoding)
         sendBytes(config, command).getOrThrow()
     }
 
-    private fun ByteArrayOutputStream.appendHeader(config: PrinterConfig) {
-        appendAscii("SIZE ${config.widthMm} mm,${config.heightMm} mm\r\n")
+    private fun ByteArrayOutputStream.appendHeader(template: LabelTemplate) {
+        appendAscii("REM TARGET_DPI ${template.resolution.dpi}\r\n")
+        appendAscii("SIZE ${template.widthMm} mm,${template.heightMm} mm\r\n")
         appendAscii("GAP 2 mm,0 mm\r\n")
         appendAscii("DIRECTION 1\r\n")
         appendAscii("CLS\r\n")
