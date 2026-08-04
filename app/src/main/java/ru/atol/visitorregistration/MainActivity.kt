@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,6 +64,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -80,6 +83,7 @@ import ru.atol.visitorregistration.model.LabelLineConfig
 import ru.atol.visitorregistration.model.LabelTemplate
 import ru.atol.visitorregistration.model.LabelTemplateKind
 import ru.atol.visitorregistration.model.LabelTextAlignment
+import ru.atol.visitorregistration.model.LabelRotation
 import ru.atol.visitorregistration.model.PrinterConfig
 import ru.atol.visitorregistration.model.PrinterEncoding
 import ru.atol.visitorregistration.model.PrinterResolution
@@ -119,6 +123,18 @@ private enum class AppSection(val title: String, val shortTitle: String) {
     SETTINGS("Настройки", "Настр.")
 }
 
+private enum class DatabaseStatusFilter(val title: String) {
+    ALL("Все"),
+    REGISTERED("Зарегистрированные"),
+    NOT_REGISTERED("Не зарегистрированные");
+
+    fun accepts(visitor: Visitor): Boolean = when (this) {
+        ALL -> true
+        REGISTERED -> visitor.checkedInAt != null
+        NOT_REGISTERED -> visitor.checkedInAt == null
+    }
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -142,8 +158,8 @@ private fun VisitorRegistrationApp(vm: MainViewModel = viewModel()) {
     }
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val tablet = maxWidth >= 700.dp
-        if (tablet) {
+        val useSideNavigation = maxWidth >= 700.dp && maxWidth > maxHeight
+        if (useSideNavigation) {
             Row(Modifier.fillMaxSize()) {
                 AppNavigationRail(section) { sectionName = it.name }
                 AppScaffold(
@@ -314,14 +330,72 @@ private fun NewVisitorScreen(vm: MainViewModel, modifier: Modifier = Modifier, o
 
 @Composable
 private fun DatabaseScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
+    var employeesExpanded by rememberSaveable { mutableStateOf(true) }
+    var visitorsExpanded by rememberSaveable { mutableStateOf(true) }
+    var filterName by rememberSaveable { mutableStateOf(DatabaseStatusFilter.ALL.name) }
+    val filter = DatabaseStatusFilter.valueOf(filterName)
+    val employees = vm.visitors.filter { it.type == VisitorType.EMPLOYEE }
+    val visitors = vm.visitors.filter { it.type != VisitorType.EMPLOYEE }
+    val filteredEmployees = employees.filter(filter::accepts)
+    val filteredVisitors = visitors.filter(filter::accepts)
+
     LazyColumn(
         modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(bottom = 20.dp)
     ) {
-        item { Text("Всего записей: ${vm.visitors.size}", color = MaterialTheme.colorScheme.secondary) }
-        if (vm.visitors.isEmpty()) item { Text("База пока не загружена") }
-        items(vm.visitors, key = Visitor::id) { visitor -> DatabaseVisitorCard(visitor) }
+        item {
+            Text("Фильтр по статусу", style = MaterialTheme.typography.titleMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                DatabaseStatusFilter.entries.forEach { option ->
+                    FilterChip(
+                        selected = filter == option,
+                        onClick = { filterName = option.name },
+                        label = { Text(option.title) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        item {
+            DatabaseGroupHeader("Сотрудники", employees, employeesExpanded) {
+                employeesExpanded = !employeesExpanded
+            }
+        }
+        if (employeesExpanded) {
+            if (filteredEmployees.isEmpty()) item { Text("Нет сотрудников с выбранным статусом") }
+            items(filteredEmployees, key = Visitor::id) { visitor -> DatabaseVisitorCard(visitor) }
+        }
+        item {
+            DatabaseGroupHeader("Посетители", visitors, visitorsExpanded) {
+                visitorsExpanded = !visitorsExpanded
+            }
+        }
+        if (visitorsExpanded) {
+            if (filteredVisitors.isEmpty()) item { Text("Нет посетителей с выбранным статусом") }
+            items(filteredVisitors, key = Visitor::id) { visitor -> DatabaseVisitorCard(visitor) }
+        }
+    }
+}
+
+@Composable
+private fun DatabaseGroupHeader(title: String, records: List<Visitor>, expanded: Boolean, onToggle: () -> Unit) {
+    val registered = records.count { it.checkedInAt != null }
+    Card(Modifier.fillMaxWidth().clickable(onClick = onToggle)) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Всего: ${records.size} · зарегистрировано: $registered · осталось: ${records.size - registered}",
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            Text(if (expanded) "▲" else "▼")
+        }
     }
 }
 
@@ -374,6 +448,42 @@ private fun TextFieldRow(label: String, value: String, enabled: Boolean = true, 
 }
 
 @Composable
+private fun IntegerFieldRow(
+    label: String,
+    value: Int,
+    allowedRange: IntRange,
+    onValidValueChange: (Int) -> Unit
+) {
+    var text by remember(value) { mutableStateOf(value.toString()) }
+    TextFieldRow(label, text) { next ->
+        text = next
+        next.trim()
+            .takeIf { it.matches(Regex("\\d+")) }
+            ?.toIntOrNull()
+            ?.takeIf { it in allowedRange }
+            ?.let(onValidValueChange)
+    }
+}
+
+@Composable
+private fun CoordinateFieldRow(
+    label: String,
+    value: Float,
+    onValidValueChange: (Float) -> Unit
+) {
+    var text by remember(value) { mutableStateOf(formatCoordinate(value)) }
+    TextFieldRow(label, text) { next ->
+        text = next
+        next.trim()
+            .takeIf { it.matches(Regex("\\d+(?:[.,]\\d+)?")) }
+            ?.replace(',', '.')
+            ?.toFloatOrNull()
+            ?.takeIf { it >= 0f }
+            ?.let(onValidValueChange)
+    }
+}
+
+@Composable
 private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     var printerName by rememberSaveable { mutableStateOf("") }
     var host by rememberSaveable { mutableStateOf("") }
@@ -382,6 +492,7 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     var editingPrinter by remember { mutableStateOf<PrinterConfig?>(null) }
     var confirmClearDatabase by remember { mutableStateOf(false) }
     var confirmClearPrinters by remember { mutableStateOf(false) }
+    var confirmFactoryReset by remember { mutableStateOf(false) }
     var printerToDelete by remember { mutableStateOf<PrinterConfig?>(null) }
     val encoding = PrinterEncoding.valueOf(encodingName)
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -473,6 +584,10 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 DropdownField("Кодировка русского текста", encoding, PrinterEncoding.entries.toList(), PrinterEncoding::title) {
                     encodingName = it.name
                 }
+                Text(
+                    "«Тест кодировок» печатает четыре строки. Выберите здесь кодировку, в которой вся строка — включая строчные буквы — напечаталась правильно, затем сохраните принтер.",
+                    color = MaterialTheme.colorScheme.secondary
+                )
                 OutlinedButton(
                     onClick = { vm.checkPrinter(printerName, host, port, encoding) },
                     enabled = !vm.printerBusy,
@@ -482,7 +597,7 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                     onClick = { vm.testPrint(printerName, host, port, encoding) },
                     enabled = !vm.printerBusy,
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("Тестовая печать") }
+                ) { Text("Тест кодировок") }
                 Button(
                     onClick = {
                         if (vm.savePrinter(printerName, host, port, encoding, editingPrinter)) {
@@ -514,6 +629,15 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             }
         }
         item { SettingsCard("О приложении") { Text("Версия ${BuildConfig.VERSION_NAME} · тестовая сборка") } }
+        item {
+            SettingsCard("Заводские настройки") {
+                OutlinedButton(
+                    onClick = { confirmFactoryReset = true },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Сбросить приложение к заводским настройкам") }
+            }
+        }
     }
 
     ConfirmDialog(confirmClearDatabase, "Очистить базу?", "Будут удалены все посетители и история регистраций.", {
@@ -524,6 +648,42 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         confirmClearPrinters = false
         vm.clearPrinters()
     }) { confirmClearPrinters = false }
+    ConfirmDialog(
+        confirmFactoryReset,
+        "Сбросить всё приложение?",
+        "Будут удалены сотрудники, посетители, история регистраций, принтеры и настройки шаблонов. Отменить это действие будет невозможно.",
+        {
+            confirmFactoryReset = false
+            vm.resetApplication()
+        }
+    ) { confirmFactoryReset = false }
+    vm.pendingImport?.let { pending ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Проверка списка завершена") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Файл: ${pending.fileName}")
+                    Text("Тип: ${pending.type.title}")
+                    Text("Режим: ${pending.mode.title}")
+                    Text("Найдено записей: ${pending.result.imported}")
+                    Text("Пропущено строк: ${pending.result.skipped}")
+                    if (pending.result.warnings.isEmpty()) {
+                        Text("Ошибок структуры не обнаружено", color = Color(0xFF16813A))
+                    } else {
+                        Text(pending.result.warnings.joinToString("\n"), color = MaterialTheme.colorScheme.error)
+                    }
+                    Text("База изменится только после нажатия «Сохранить».")
+                }
+            },
+            confirmButton = {
+                Button(onClick = vm::confirmImport, enabled = !vm.importBusy) { Text("Сохранить") }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::cancelImport, enabled = !vm.importBusy) { Text("Отменить") }
+            }
+        )
+    }
     printerToDelete?.let { printer ->
         ConfirmDialog(true, "Удалить принтер?", printer.name, {
             printerToDelete = null
@@ -548,6 +708,7 @@ private fun LabelTemplateEditor(vm: MainViewModel) {
     var visitorDraft by remember { mutableStateOf(vm.visitorTemplate) }
     var employeeDraft by remember { mutableStateOf(vm.employeeTemplate) }
     var tsplText by remember { mutableStateOf<String?>(null) }
+    var confirmReset by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val kind = LabelTemplateKind.valueOf(kindName)
     val template = if (kind == LabelTemplateKind.VISITOR) visitorDraft else employeeDraft
@@ -568,15 +729,28 @@ private fun LabelTemplateEditor(vm: MainViewModel) {
                 )
             }
         }
+        DropdownField("Количество этикеток", template.copies, (1..4).toList(), { "$it шт." }) {
+            setTemplate(template.copy(copies = it))
+        }
         DropdownField("Разрешение принтера", template.resolution, PrinterResolution.entries.toList(), PrinterResolution::title) {
             setTemplate(template.copy(resolution = it))
         }
-        TextFieldRow("Ширина этикетки, мм", template.widthMm.toString()) { value ->
-            value.toIntOrNull()?.takeIf { it in 20..120 }?.let { setTemplate(template.copy(widthMm = it)) }
+        IntegerFieldRow("Ширина этикетки, мм", template.widthMm, 20..120) { value ->
+            setTemplate(template.copy(widthMm = value))
         }
-        TextFieldRow("Высота этикетки, мм", template.heightMm.toString()) { value ->
-            value.toIntOrNull()?.takeIf { it in 15..100 }?.let { setTemplate(template.copy(heightMm = it)) }
+        IntegerFieldRow("Высота этикетки, мм", template.heightMm, 15..100) { value ->
+            setTemplate(template.copy(heightMm = value))
         }
+        DropdownField("Поворот печати", template.rotation, LabelRotation.entries.toList(), LabelRotation::title) {
+            setTemplate(template.copy(rotation = it))
+        }
+        DropdownField("Выравнивание всего шаблона", template.alignment, LabelTextAlignment.entries.toList(), LabelTextAlignment::title) {
+            setTemplate(template.copy(alignment = it))
+        }
+        Text(
+            "Если носитель установлен как 50 × 70 мм, задайте ширину 50, высоту 70 и поворот 90° или 270°.",
+            color = MaterialTheme.colorScheme.secondary
+        )
         LabelPreview(template, vm.previewLayout(template))
         template.lines.forEachIndexed { index, line ->
             LabelLineEditor(
@@ -607,10 +781,32 @@ private fun LabelTemplateEditor(vm: MainViewModel) {
             modifier = Modifier.fillMaxWidth()
         ) { Text("Добавить текстовый блок") }
         Button(onClick = { vm.saveLabelTemplate(template) }, modifier = Modifier.fillMaxWidth()) { Text("Сохранить шаблон") }
+        Button(
+            onClick = { vm.testLabelTemplate(template) },
+            enabled = !vm.printerBusy,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Тестовая печать этого шаблона") }
         OutlinedButton(onClick = { tsplText = vm.labelTemplateTspl(template) }, modifier = Modifier.fillMaxWidth()) {
             Text("Показать шаблон TSPL")
         }
+        OutlinedButton(
+            onClick = { confirmReset = true },
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Сбросить этот шаблон к заводским настройкам") }
     }
+
+    ConfirmDialog(
+        visible = confirmReset,
+        title = "Сбросить шаблон?",
+        message = "Шаблон «${kind.title}» вернётся к размеру 50 × 70 мм, одной этикетке, 203 dpi, повороту 90° и стандартным полям.",
+        onConfirm = {
+            confirmReset = false
+            val reset = vm.resetLabelTemplate(kind)
+            if (kind == LabelTemplateKind.VISITOR) visitorDraft = reset else employeeDraft = reset
+        },
+        onDismiss = { confirmReset = false }
+    )
 
     tsplText?.let { text ->
         AlertDialog(
@@ -665,29 +861,24 @@ private fun LabelLineEditor(
             TextFieldRow("Имя нестандартного шрифта", if (selectedFont == "Другой") line.fontName else "", selectedFont == "Другой") {
                 onChange(line.copy(fontName = it))
             }
-            TextFieldRow("Размер шрифта", line.fontSize.toString()) { value ->
-                value.toIntOrNull()?.takeIf { it in 8..72 }?.let { onChange(line.copy(fontSize = it)) }
+            if (selectedFont == "Другой") {
+                Text(
+                    "Укажите точное имя файла шрифта в памяти принтера, включая расширение, например ARIAL.TTF. Для TTF размер передаётся в пунктах.",
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            IntegerFieldRow("Размер шрифта", line.fontSize, 8..72) { value ->
+                onChange(line.copy(fontSize = value))
             }
             DropdownField("Начертание", line.style, LabelFontStyle.entries.toList(), LabelFontStyle::title) {
                 onChange(line.copy(style = it))
             }
-            DropdownField("Выравнивание", line.alignment, LabelTextAlignment.entries.toList(), LabelTextAlignment::title) {
-                onChange(line.copy(alignment = it))
+            CoordinateFieldRow("Позиция X, мм", line.xMm) { value ->
+                onChange(line.copy(xMm = value, automaticPosition = false))
             }
-            TextFieldRow("Позиция X, мм", formatCoordinate(line.xMm)) { value ->
-                value.replace(',', '.').toFloatOrNull()?.takeIf { it >= 0f }?.let {
-                    onChange(line.copy(xMm = it, automaticPosition = false))
-                }
+            CoordinateFieldRow("Позиция Y, мм", line.yMm) { value ->
+                onChange(line.copy(yMm = value, automaticPosition = false))
             }
-            TextFieldRow("Позиция Y, мм", formatCoordinate(line.yMm)) { value ->
-                value.replace(',', '.').toFloatOrNull()?.takeIf { it >= 0f }?.let {
-                    onChange(line.copy(yMm = it, automaticPosition = false))
-                }
-            }
-            OutlinedButton(
-                onClick = { onChange(line.copy(automaticPosition = true)) },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(if (line.automaticPosition) "Координаты рассчитываются автоматически" else "Рассчитать координаты автоматически") }
         }
     }
 }
@@ -695,16 +886,24 @@ private fun LabelLineEditor(
 @Composable
 private fun LabelPreview(template: LabelTemplate, placements: List<PlacedLabelText>) {
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text("Превью · ${template.kind.title} · ${template.widthMm} × ${template.heightMm} мм · ${template.resolution.title}")
+        Text("Превью · ${template.kind.title} · ${template.widthMm} × ${template.heightMm} мм · ${template.rotation.title} · ${template.resolution.title}")
         BoxWithConstraints(
-            Modifier.fillMaxWidth().widthIn(max = 620.dp).aspectRatio(template.widthMm.toFloat() / template.heightMm)
+            Modifier.fillMaxWidth(0.42f).widthIn(max = 160.dp)
+                .aspectRatio(template.widthMm.toFloat() / template.heightMm)
+                .align(Alignment.CenterHorizontally)
                 .background(Color.White).border(1.dp, Color.DarkGray)
         ) {
             val scale = maxWidth.value / template.widthMm
             placements.forEach { placed ->
-                val x = (placed.xMm * scale).dp
-                val y = (placed.yMm * scale).dp
-                val availableWidth = ((template.widthMm - placed.xMm).coerceAtLeast(2f) * scale).dp
+                val (physicalX, physicalY) = when (template.rotation) {
+                    LabelRotation.DEG_0 -> placed.xMm to placed.yMm
+                    LabelRotation.DEG_90 -> (template.widthMm - placed.yMm) to placed.xMm
+                    LabelRotation.DEG_180 -> (template.widthMm - placed.xMm) to (template.heightMm - placed.yMm)
+                    LabelRotation.DEG_270 -> placed.yMm to (template.heightMm - placed.xMm)
+                }
+                val x = (physicalX * scale).dp
+                val y = (physicalY * scale).dp
+                val textWidth = (placed.estimatedWidthMm.coerceAtLeast(2f) * scale).dp
                 val previewFont = (placed.fontSize * 25.4f / 72f * scale).coerceAtLeast(6f).sp
                 Text(
                     text = placed.text,
@@ -713,13 +912,13 @@ private fun LabelPreview(template: LabelTemplate, placements: List<PlacedLabelTe
                     fontWeight = if (placed.style == LabelFontStyle.BOLD) FontWeight.Bold else FontWeight.Normal,
                     fontStyle = if (placed.style == LabelFontStyle.ITALIC) FontStyle.Italic else FontStyle.Normal,
                     textDecoration = if (placed.style == LabelFontStyle.UNDERLINE) TextDecoration.Underline else TextDecoration.None,
-                    textAlign = when (placed.alignment) {
-                        LabelTextAlignment.LEFT -> TextAlign.Left
-                        LabelTextAlignment.CENTER -> TextAlign.Center
-                        LabelTextAlignment.RIGHT -> TextAlign.Right
-                    },
+                    textAlign = TextAlign.Left,
                     maxLines = 1,
-                    modifier = Modifier.offset(x, y).width(availableWidth)
+                    lineHeight = previewFont,
+                    modifier = Modifier.offset(x, y).width(textWidth).graphicsLayer {
+                        rotationZ = template.rotation.degrees.toFloat()
+                        transformOrigin = TransformOrigin(0f, 0f)
+                    }
                 )
             }
         }

@@ -34,7 +34,7 @@ class TsplPrinterClient(
                     x = (3f * dotsPerMm).toInt(),
                     y = ((3f + index * 10f) * dotsPerMm).toInt(),
                     font = font,
-                    text = "${encoding.title}: ТЕСТ ЯЁЙ"
+                    text = "${encoding.title}: Иванов Иван, Ёжик"
                 )
             }
             appendAscii("PRINT 1,1\r\n")

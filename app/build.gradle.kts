@@ -11,8 +11,8 @@ android {
         applicationId = "ru.atol.visitorregistration"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 17
+        versionName = "0.8.0-rc1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

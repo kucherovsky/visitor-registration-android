@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class XlsxTableReaderTest {
@@ -29,6 +30,22 @@ class XlsxTableReaderTest {
 
         assertEquals(listOf("Фамилия", "Имя"), rows[0])
         assertEquals(listOf("Иванов", "", "Иван"), rows[1])
+    }
+
+    @Test
+    fun rejectsDoctypeBeforeXmlParserRuns() {
+        val sharedStrings = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE sst [<!ENTITY external SYSTEM "file:///etc/passwd">]>
+            <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>&external;</t></si></sst>
+        """.trimIndent()
+        val sheet = """
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>
+        """.trimIndent()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            XlsxTableReader().read(ByteArrayInputStream(xlsx(sharedStrings, sheet)))
+        }
     }
 
     private fun xlsx(sharedStrings: String, sheet: String): ByteArray {
