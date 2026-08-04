@@ -12,16 +12,22 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import ru.atol.visitorregistration.data.ImportResult
 import ru.atol.visitorregistration.data.local.AppDatabase
+import ru.atol.visitorregistration.data.local.LabelTemplateStore
 import ru.atol.visitorregistration.data.local.RoomPrinterRepository
 import ru.atol.visitorregistration.data.local.RoomVisitorRepository
 import ru.atol.visitorregistration.exporting.AndroidAttendanceExporter
 import ru.atol.visitorregistration.importing.AndroidSpreadsheetImporter
 import ru.atol.visitorregistration.model.PrinterConfig
 import ru.atol.visitorregistration.model.PrinterEncoding
+import ru.atol.visitorregistration.model.LabelTemplate
+import ru.atol.visitorregistration.model.LabelTemplateKind
 import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorSource
 import ru.atol.visitorregistration.model.VisitorType
+import ru.atol.visitorregistration.model.matchesSearch
 import ru.atol.visitorregistration.printing.TsplPrinterClient
+import ru.atol.visitorregistration.printing.TsplTemplateEngine
+import ru.atol.visitorregistration.printing.PlacedLabelText
 
 enum class ImportMode(val title: String) {
     REPLACE("Заменить список"),
@@ -34,7 +40,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val printerRepository = RoomPrinterRepository(database)
     private val importer = AndroidSpreadsheetImporter(application)
     private val exporter = AndroidAttendanceExporter(application)
-    private val printerClient = TsplPrinterClient()
+    private val templateStore = LabelTemplateStore(application)
+    private val templateEngine = TsplTemplateEngine()
+    private val printerClient = TsplPrinterClient(templateEngine)
 
     var visitors by mutableStateOf<List<Visitor>>(emptyList())
         private set
@@ -50,6 +58,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var importBusy by mutableStateOf(false)
         private set
+    var visitorTemplate by mutableStateOf(templateEngine.applyAutomaticPositions(templateStore.load(LabelTemplateKind.VISITOR)))
+        private set
+    var employeeTemplate by mutableStateOf(templateEngine.applyAutomaticPositions(templateStore.load(LabelTemplateKind.EMPLOYEE)))
+        private set
 
     init {
         viewModelScope.launch {
@@ -62,16 +74,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val searchResults: List<Visitor>
         get() {
-            val query = searchQuery.trim()
-            if (query.isBlank()) return emptyList()
-            return visitors.filter {
-                it.lastName.contains(query, ignoreCase = true) ||
-                    it.firstName.contains(query, ignoreCase = true)
-            }
+            if (searchQuery.isBlank()) return emptyList()
+            return visitors.filter { it.matchesSearch(searchQuery) }
         }
 
     val checkedInCount: Int get() = visitors.count { it.checkedInAt != null }
     val activePrinter: PrinterConfig? get() = printers.firstOrNull { it.isDefault } ?: printers.firstOrNull()
+
+    fun labelTemplate(kind: LabelTemplateKind): LabelTemplate = when (kind) {
+        LabelTemplateKind.VISITOR -> visitorTemplate
+        LabelTemplateKind.EMPLOYEE -> employeeTemplate
+    }
+
+    fun applyAutomaticLayout(template: LabelTemplate): LabelTemplate = templateEngine.applyAutomaticPositions(template)
+
+    fun previewLayout(template: LabelTemplate): List<PlacedLabelText> =
+        templateEngine.layout(template, templateEngine.sampleVisitor(template.kind))
+
+    fun labelTemplateTspl(template: LabelTemplate): String = templateEngine.templateText(template)
+
+    fun saveLabelTemplate(template: LabelTemplate) {
+        val resolved = templateEngine.applyAutomaticPositions(template)
+        templateStore.save(resolved)
+        when (resolved.kind) {
+            LabelTemplateKind.VISITOR -> visitorTemplate = resolved
+            LabelTemplateKind.EMPLOYEE -> employeeTemplate = resolved
+        }
+        statusMessage = "Шаблон «${resolved.kind.title}» сохранён"
+    }
 
     fun importFile(uri: Uri) {
         if (importBusy) return
@@ -144,13 +174,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         name: String,
         host: String,
         port: String,
-        width: String,
-        height: String,
         encoding: PrinterEncoding,
-        fontName: String,
         existing: PrinterConfig? = null
     ): Boolean {
-        val printer = printerFromFields(name, host, port, width, height, encoding, fontName, existing) ?: return false
+        val printer = printerFromFields(name, host, port, encoding, existing) ?: return false
         viewModelScope.launch {
             printerRepository.save(printer.copy(isDefault = existing?.isDefault == true || printers.isEmpty()))
             statusMessage = if (existing == null) "Принтер ${printer.name} добавлен" else "Принтер ${printer.name} обновлён"
@@ -172,17 +199,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun checkPrinter(name: String, host: String, port: String, width: String, height: String, encoding: PrinterEncoding, fontName: String) {
-        val printer = printerFromFields(name, host, port, width, height, encoding, fontName) ?: return
+    fun checkPrinter(name: String, host: String, port: String, encoding: PrinterEncoding) {
+        val printer = printerFromFields(name, host, port, encoding) ?: return
         runPrinterAction("Соединение с принтером установлено") {
             printerClient.checkConnection(printer)
         }
     }
 
-    fun testPrint(name: String, host: String, port: String, width: String, height: String, encoding: PrinterEncoding, fontName: String) {
-        val printer = printerFromFields(name, host, port, width, height, encoding, fontName) ?: return
+    fun testPrint(name: String, host: String, port: String, encoding: PrinterEncoding) {
+        val printer = printerFromFields(name, host, port, encoding) ?: return
         runPrinterAction("Тест четырёх кодировок отправлен") {
-            printerClient.printTest(printer)
+            printerClient.printTest(printer, visitorTemplate)
         }
     }
 
@@ -198,10 +225,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         name: String,
         host: String,
         port: String,
-        width: String,
-        height: String,
         encoding: PrinterEncoding,
-        fontName: String,
         existing: PrinterConfig? = null
     ): PrinterConfig? {
         if (host.isBlank()) {
@@ -213,10 +237,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             name = name.trim().ifBlank { "Основной принтер" },
             host = host.trim(),
             port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: 9100,
-            widthMm = width.toIntOrNull()?.takeIf { it > 0 } ?: 58,
-            heightMm = height.toIntOrNull()?.takeIf { it > 0 } ?: 40,
+            widthMm = existing?.widthMm ?: 70,
+            heightMm = existing?.heightMm ?: 50,
             encoding = encoding,
-            fontName = fontName.trim().ifBlank { "3" },
+            fontName = existing?.fontName ?: "3",
             isDefault = existing?.isDefault ?: false
         )
     }
@@ -245,7 +269,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         printerBusy = true
-        val result = printerClient.printBadge(printer, visitor)
+        val template = if (visitor.type == VisitorType.EMPLOYEE) employeeTemplate else visitorTemplate
+        val result = printerClient.printBadge(printer, visitor, template)
         result.onSuccess { repository.markPrinted(visitor.id) }
         statusMessage = result.fold(
             onSuccess = { "$registrationMessage, этикетка напечатана" },
@@ -274,4 +299,5 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
         ?: uri.lastPathSegment.orEmpty()
+
 }

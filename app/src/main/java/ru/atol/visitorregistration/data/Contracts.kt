@@ -3,6 +3,7 @@ package ru.atol.visitorregistration.data
 import android.net.Uri
 import kotlinx.coroutines.flow.Flow
 import ru.atol.visitorregistration.model.PrinterConfig
+import ru.atol.visitorregistration.model.LabelTemplate
 import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorType
 
@@ -42,6 +43,6 @@ interface PrinterRepository {
 
 interface PrinterService {
     suspend fun checkConnection(config: PrinterConfig): Result<Unit>
-    suspend fun printTest(config: PrinterConfig): Result<Unit>
-    suspend fun printBadge(config: PrinterConfig, visitor: Visitor): Result<Unit>
+    suspend fun printTest(config: PrinterConfig, template: LabelTemplate): Result<Unit>
+    suspend fun printBadge(config: PrinterConfig, visitor: Visitor, template: LabelTemplate): Result<Unit>
 }
