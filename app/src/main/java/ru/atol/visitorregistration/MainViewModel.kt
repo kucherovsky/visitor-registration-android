@@ -1,6 +1,7 @@
 package ru.atol.visitorregistration
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
@@ -24,6 +25,7 @@ import ru.atol.visitorregistration.model.LabelTemplateKind
 import ru.atol.visitorregistration.model.Visitor
 import ru.atol.visitorregistration.model.VisitorSource
 import ru.atol.visitorregistration.model.VisitorType
+import ru.atol.visitorregistration.model.defaultLabelTemplate
 import ru.atol.visitorregistration.model.matchesSearch
 import ru.atol.visitorregistration.printing.TsplPrinterClient
 import ru.atol.visitorregistration.printing.TsplTemplateEngine
@@ -34,6 +36,13 @@ enum class ImportMode(val title: String) {
     APPEND("Добавить к списку")
 }
 
+data class PendingImport(
+    val fileName: String,
+    val type: VisitorType,
+    val mode: ImportMode,
+    val result: ImportResult
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.get(application)
     private val repository = RoomVisitorRepository(database)
@@ -41,16 +50,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val importer = AndroidSpreadsheetImporter(application)
     private val exporter = AndroidAttendanceExporter(application)
     private val templateStore = LabelTemplateStore(application)
+    private val settings = application.getSharedPreferences("app-settings", Context.MODE_PRIVATE)
     private val templateEngine = TsplTemplateEngine()
     private val printerClient = TsplPrinterClient(templateEngine)
 
     var visitors by mutableStateOf<List<Visitor>>(emptyList())
         private set
     var searchQuery by mutableStateOf("")
+    var clearSearchAfterPrint by mutableStateOf(settings.getBoolean(CLEAR_SEARCH_AFTER_PRINT_KEY, true))
+        private set
     var selectedImportType by mutableStateOf(VisitorType.PARTNER)
     var importMode by mutableStateOf(ImportMode.REPLACE)
     var selectedFileName by mutableStateOf<String?>(null)
     var lastImportResult by mutableStateOf<ImportResult?>(null)
+    var pendingImport by mutableStateOf<PendingImport?>(null)
+        private set
     var printers by mutableStateOf<List<PrinterConfig>>(emptyList())
         private set
     var statusMessage by mutableStateOf<String?>(null)
@@ -103,34 +117,76 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         statusMessage = "Шаблон «${resolved.kind.title}» сохранён"
     }
 
+    fun resetLabelTemplate(kind: LabelTemplateKind): LabelTemplate {
+        val reset = templateEngine.applyAutomaticPositions(defaultLabelTemplate(kind))
+        templateStore.save(reset)
+        when (kind) {
+            LabelTemplateKind.VISITOR -> visitorTemplate = reset
+            LabelTemplateKind.EMPLOYEE -> employeeTemplate = reset
+        }
+        statusMessage = "Шаблон «${kind.title}» сброшен к заводским настройкам"
+        return reset
+    }
+
+    fun testLabelTemplate(template: LabelTemplate) {
+        val printer = activePrinter
+        if (printer == null) {
+            statusMessage = "Сначала добавьте и выберите основной принтер"
+            return
+        }
+        val sample = templateEngine.sampleVisitor(template.kind)
+        runPrinterAction("Тестовый шаблон «${template.kind.title}» отправлен") {
+            printerClient.printBadge(printer, sample, template)
+        }
+    }
+
     fun importFile(uri: Uri) {
         if (importBusy) return
         val type = selectedImportType
         val mode = importMode
-        selectedFileName = displayName(uri)
+        val fileName = displayName(uri)
+        selectedFileName = fileName
         importBusy = true
         lastImportResult = null
-        statusMessage = "Загружаем список…"
+        pendingImport = null
+        statusMessage = "Проверяем выбранный файл…"
         viewModelScope.launch {
-            runCatching {
-                val result = importer.read(uri, type)
-                if (mode == ImportMode.REPLACE) {
-                    repository.replaceImported(type, result.visitors)
-                } else {
-                    repository.saveAll(result.visitors)
-                }
-                result
-            }
+            runCatching { importer.read(uri, type) }
                 .onSuccess { result ->
-                    lastImportResult = result
-                    statusMessage = buildString {
-                        append("Загружено записей: ${result.imported}")
-                        if (result.warnings.isNotEmpty()) append(". ${result.warnings.joinToString("; ")}")
-                    }
+                    pendingImport = PendingImport(fileName, type, mode, result)
+                    statusMessage = null
                 }
-                .onFailure { error -> statusMessage = "Ошибка загрузки: ${error.message ?: "неверный файл"}" }
+                .onFailure { error -> statusMessage = "Ошибка загрузки: ${importErrorMessage(error)}" }
             importBusy = false
         }
+    }
+
+    fun confirmImport() {
+        val pending = pendingImport ?: return
+        if (importBusy) return
+        importBusy = true
+        viewModelScope.launch {
+            runCatching {
+                if (pending.mode == ImportMode.REPLACE) {
+                    repository.replaceImported(pending.type, pending.result.visitors)
+                } else {
+                    repository.saveAll(pending.result.visitors)
+                }
+            }.onSuccess {
+                lastImportResult = pending.result
+                pendingImport = null
+                statusMessage = "Список сохранён: ${pending.result.imported} записей"
+            }.onFailure { error ->
+                statusMessage = "Ошибка сохранения: ${error.message ?: "не удалось обновить базу"}"
+            }
+            importBusy = false
+        }
+    }
+
+    fun cancelImport() {
+        pendingImport = null
+        selectedFileName = null
+        statusMessage = "Загрузка отменена"
     }
 
     fun addVisitor(
@@ -164,10 +220,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkInAndPrint(visitor: Visitor) {
         if (printerBusy) return
+        if (clearSearchAfterPrint) searchQuery = ""
         viewModelScope.launch {
             val checkedIn = repository.checkIn(visitor.id)
             printAfterRegistration(checkedIn, "${visitor.fullName} зарегистрирован")
         }
+    }
+
+    fun updateClearSearchAfterPrint(enabled: Boolean) {
+        clearSearchAfterPrint = enabled
+        settings.edit().putBoolean(CLEAR_SEARCH_AFTER_PRINT_KEY, enabled).apply()
     }
 
     fun savePrinter(
@@ -237,8 +299,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             name = name.trim().ifBlank { "Основной принтер" },
             host = host.trim(),
             port = port.toIntOrNull()?.takeIf { it in 1..65535 } ?: 9100,
-            widthMm = existing?.widthMm ?: 70,
-            heightMm = existing?.heightMm ?: 50,
+            widthMm = existing?.widthMm ?: 50,
+            heightMm = existing?.heightMm ?: 70,
             encoding = encoding,
             fontName = existing?.fontName ?: "3",
             isDefault = existing?.isDefault ?: false
@@ -250,6 +312,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.clearAll()
             searchQuery = ""
             lastImportResult = null
+            pendingImport = null
             selectedFileName = null
             statusMessage = "База посетителей очищена"
         }
@@ -259,6 +322,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             printerRepository.clearAll()
             statusMessage = "Все принтеры удалены"
+        }
+    }
+
+    fun resetApplication() {
+        viewModelScope.launch {
+            repository.clearAll()
+            printerRepository.clearAll()
+            templateStore.clearAll()
+            settings.edit().clear().apply()
+            searchQuery = ""
+            clearSearchAfterPrint = true
+            selectedImportType = VisitorType.PARTNER
+            importMode = ImportMode.REPLACE
+            selectedFileName = null
+            lastImportResult = null
+            pendingImport = null
+            visitorTemplate = templateEngine.applyAutomaticPositions(defaultLabelTemplate(LabelTemplateKind.VISITOR))
+            employeeTemplate = templateEngine.applyAutomaticPositions(defaultLabelTemplate(LabelTemplateKind.EMPLOYEE))
+            statusMessage = "Приложение сброшено к заводским настройкам"
         }
     }
 
@@ -299,5 +381,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
         ?: uri.lastPathSegment.orEmpty()
+
+    private fun importErrorMessage(error: Throwable): String = generateSequence(error) { it.cause }
+        .mapNotNull { it.message?.trim()?.takeIf(String::isNotBlank) }
+        .firstOrNull()
+        ?: "не удалось прочитать Excel-файл"
+
+    private companion object {
+        const val CLEAR_SEARCH_AFTER_PRINT_KEY = "clear-search-after-print"
+    }
 
 }

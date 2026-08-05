@@ -33,8 +33,8 @@ data class PrinterConfig(
     val name: String = "Основной принтер",
     val host: String = "",
     val port: Int = 9100,
-    val widthMm: Int = 70,
-    val heightMm: Int = 50,
+    val widthMm: Int = 50,
+    val heightMm: Int = 70,
     val encoding: PrinterEncoding = PrinterEncoding.WINDOWS_1251,
     val fontName: String = "3",
     val isDefault: Boolean = false
@@ -55,6 +55,13 @@ enum class LabelTemplateKind(val title: String) {
 enum class PrinterResolution(val title: String, val dpi: Int) {
     DPI_203("203 dpi", 203),
     DPI_300("300 dpi", 300)
+}
+
+enum class LabelRotation(val title: String, val degrees: Int) {
+    DEG_0("0° · без поворота", 0),
+    DEG_90("90° · по часовой стрелке", 90),
+    DEG_180("180°", 180),
+    DEG_270("270° · против часовой стрелки", 270)
 }
 
 enum class LabelAttribute(val title: String) {
@@ -79,38 +86,49 @@ enum class LabelTextAlignment(val title: String) {
     RIGHT("По правому краю")
 }
 
+const val REGULAR_LABEL_FONT = "FNR.TTF"
+const val BOLD_LABEL_FONT = "FNB.TTF"
+
 data class LabelLineConfig(
     val id: String = UUID.randomUUID().toString(),
     val attribute: LabelAttribute,
     val visible: Boolean = true,
-    val fontName: String = "3",
+    val fontName: String = REGULAR_LABEL_FONT,
     val fontSize: Int = 18,
     val style: LabelFontStyle = LabelFontStyle.NORMAL,
     val alignment: LabelTextAlignment = LabelTextAlignment.LEFT,
-    val xMm: Float = 3.5f,
-    val yMm: Float = 3f,
+    val xMm: Float = 0f,
+    val yMm: Float = 0f,
     val automaticPosition: Boolean = true
 )
 
 data class LabelTemplate(
     val kind: LabelTemplateKind,
-    val widthMm: Int = 70,
-    val heightMm: Int = 50,
+    val widthMm: Int = 50,
+    val heightMm: Int = 70,
     val resolution: PrinterResolution = PrinterResolution.DPI_203,
+    val copies: Int = 2,
+    val rotation: LabelRotation = LabelRotation.DEG_90,
+    val alignment: LabelTextAlignment = LabelTextAlignment.LEFT,
     val lines: List<LabelLineConfig> = defaultLabelLines(kind)
-)
+) {
+    val layoutWidthMm: Int
+        get() = if (rotation == LabelRotation.DEG_90 || rotation == LabelRotation.DEG_270) heightMm else widthMm
+    val layoutHeightMm: Int
+        get() = if (rotation == LabelRotation.DEG_90 || rotation == LabelRotation.DEG_270) widthMm else heightMm
+}
 
 fun defaultLabelTemplate(kind: LabelTemplateKind): LabelTemplate = LabelTemplate(kind = kind)
 
 private fun defaultLabelLines(kind: LabelTemplateKind): List<LabelLineConfig> = when (kind) {
     LabelTemplateKind.VISITOR -> listOf(
-        LabelLineConfig(attribute = LabelAttribute.FULL_NAME, fontSize = 28, style = LabelFontStyle.BOLD),
-        LabelLineConfig(attribute = LabelAttribute.COMPANY, fontSize = 19),
-        LabelLineConfig(attribute = LabelAttribute.CITY, fontSize = 16)
+        LabelLineConfig(attribute = LabelAttribute.FULL_NAME, fontName = BOLD_LABEL_FONT, fontSize = 22, yMm = 3f),
+        LabelLineConfig(attribute = LabelAttribute.COMPANY, fontName = REGULAR_LABEL_FONT, fontSize = 12),
+        LabelLineConfig(attribute = LabelAttribute.CITY, fontName = REGULAR_LABEL_FONT, fontSize = 12)
     )
     LabelTemplateKind.EMPLOYEE -> listOf(
-        LabelLineConfig(attribute = LabelAttribute.FULL_NAME, fontSize = 28, style = LabelFontStyle.BOLD),
-        LabelLineConfig(attribute = LabelAttribute.POSITION, fontSize = 18),
-        LabelLineConfig(attribute = LabelAttribute.COMPANY, fontSize = 16)
+        LabelLineConfig(attribute = LabelAttribute.FULL_NAME, fontName = BOLD_LABEL_FONT, fontSize = 22, yMm = 3f),
+        LabelLineConfig(attribute = LabelAttribute.POSITION, fontName = REGULAR_LABEL_FONT, fontSize = 10),
+        LabelLineConfig(attribute = LabelAttribute.COMPANY, fontName = BOLD_LABEL_FONT, fontSize = 16)
     )
 }

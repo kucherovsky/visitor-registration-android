@@ -1,9 +1,14 @@
 *.iml
 .gradle/
+.kotlin/
 /local.properties
 /.idea/
 /build/
 /captures/
+/artifacts/
+/outputs/
+/branding/atol-check-in-icon-source-v2.png
+/.tools/
 .externalNativeBuild/
 .cxx/
 app/build/

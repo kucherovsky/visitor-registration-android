@@ -90,10 +90,23 @@ class XlsxTableReader {
         return letters.fold(0) { value, char -> value * 26 + (char.uppercaseChar() - 'A' + 1) } - 1
     }
 
-    private fun parseXml(bytes: ByteArray) = DocumentBuilderFactory.newInstance().apply {
-        isNamespaceAware = true
-        setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-        setFeature("http://xml.org/sax/features/external-general-entities", false)
-        setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-    }.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
+    private fun parseXml(bytes: ByteArray): org.w3c.dom.Document {
+        require(!String(bytes, Charsets.UTF_8).contains("<!DOCTYPE", ignoreCase = true)) {
+            "Excel-файл содержит запрещённое XML-описание"
+        }
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            runCatching { isExpandEntityReferences = false }
+            runCatching { isXIncludeAware = false }
+        }
+        // Набор поддерживаемых XML-функций отличается между Android и обычной JVM.
+        // DOCTYPE проверяется выше напрямую, остальные ограничения включаются там, где они доступны.
+        listOf(
+            "http://apache.org/xml/features/disallow-doctype-decl" to true,
+            "http://xml.org/sax/features/external-general-entities" to false,
+            "http://xml.org/sax/features/external-parameter-entities" to false,
+            "http://apache.org/xml/features/nonvalidating/load-external-dtd" to false
+        ).forEach { (feature, enabled) -> runCatching { factory.setFeature(feature, enabled) } }
+        return factory.newDocumentBuilder().parse(ByteArrayInputStream(bytes))
+    }
 }
