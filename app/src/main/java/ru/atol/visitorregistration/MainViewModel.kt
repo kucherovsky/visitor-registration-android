@@ -1,6 +1,7 @@
 package ru.atol.visitorregistration
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
@@ -49,12 +50,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val importer = AndroidSpreadsheetImporter(application)
     private val exporter = AndroidAttendanceExporter(application)
     private val templateStore = LabelTemplateStore(application)
+    private val settings = application.getSharedPreferences("app-settings", Context.MODE_PRIVATE)
     private val templateEngine = TsplTemplateEngine()
     private val printerClient = TsplPrinterClient(templateEngine)
 
     var visitors by mutableStateOf<List<Visitor>>(emptyList())
         private set
     var searchQuery by mutableStateOf("")
+    var clearSearchAfterPrint by mutableStateOf(settings.getBoolean(CLEAR_SEARCH_AFTER_PRINT_KEY, true))
+        private set
     var selectedImportType by mutableStateOf(VisitorType.PARTNER)
     var importMode by mutableStateOf(ImportMode.REPLACE)
     var selectedFileName by mutableStateOf<String?>(null)
@@ -216,11 +220,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkInAndPrint(visitor: Visitor) {
         if (printerBusy) return
-        searchQuery = ""
+        if (clearSearchAfterPrint) searchQuery = ""
         viewModelScope.launch {
             val checkedIn = repository.checkIn(visitor.id)
             printAfterRegistration(checkedIn, "${visitor.fullName} зарегистрирован")
         }
+    }
+
+    fun updateClearSearchAfterPrint(enabled: Boolean) {
+        clearSearchAfterPrint = enabled
+        settings.edit().putBoolean(CLEAR_SEARCH_AFTER_PRINT_KEY, enabled).apply()
     }
 
     fun savePrinter(
@@ -321,7 +330,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.clearAll()
             printerRepository.clearAll()
             templateStore.clearAll()
+            settings.edit().clear().apply()
             searchQuery = ""
+            clearSearchAfterPrint = true
             selectedImportType = VisitorType.PARTNER
             importMode = ImportMode.REPLACE
             selectedFileName = null
@@ -375,5 +386,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .mapNotNull { it.message?.trim()?.takeIf(String::isNotBlank) }
         .firstOrNull()
         ?: "не удалось прочитать Excel-файл"
+
+    private companion object {
+        const val CLEAR_SEARCH_AFTER_PRINT_KEY = "clear-search-after-print"
+    }
 
 }

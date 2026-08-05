@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -72,6 +73,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -118,7 +121,7 @@ private val AtolDarkScheme = darkColorScheme(
 
 private enum class AppSection(val title: String, val shortTitle: String) {
     SEARCH("Регистрация", "Поиск"),
-    ADD("Новый посетитель", "Добавить"),
+    ADD("Добавление в базу", "Добавить"),
     DATABASE("Загруженная база", "База"),
     SETTINGS("Настройки", "Настр.")
 }
@@ -317,11 +320,11 @@ private fun NewVisitorScreen(vm: MainViewModel, modifier: Modifier = Modifier, o
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item { Text("Посетитель отсутствует в исходном списке", style = MaterialTheme.typography.titleMedium) }
-        item { TextFieldRow("Фамилия *", lastName) { lastName = it } }
-        item { TextFieldRow("Имя", firstName) { firstName = it } }
-        item { TextFieldRow("Компания", company) { company = it } }
-        item { TextFieldRow("Должность", position) { position = it } }
-        item { TextFieldRow("Город", city) { city = it } }
+        item { TextFieldRow("Фамилия *", lastName, capitalizeFirst = true) { lastName = it } }
+        item { TextFieldRow("Имя", firstName, capitalizeFirst = true) { firstName = it } }
+        item { TextFieldRow("Компания", company, capitalizeFirst = true) { company = it } }
+        item { TextFieldRow("Должность", position, capitalizeFirst = true) { position = it } }
+        item { TextFieldRow("Город", city, capitalizeFirst = true) { city = it } }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(VisitorType.GUEST, VisitorType.EMPLOYEE).forEach { option ->
@@ -452,15 +455,32 @@ private fun DatabaseField(label: String, value: String) {
 }
 
 @Composable
-private fun TextFieldRow(label: String, value: String, enabled: Boolean = true, onValueChange: (String) -> Unit) {
+private fun TextFieldRow(
+    label: String,
+    value: String,
+    enabled: Boolean = true,
+    capitalizeFirst: Boolean = false,
+    onValueChange: (String) -> Unit
+) {
     OutlinedTextField(
         value = value,
-        onValueChange = onValueChange,
+        onValueChange = { next ->
+            onValueChange(if (capitalizeFirst) capitalizeFirstLetter(next) else next)
+        },
         enabled = enabled,
         label = { Text(label) },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            capitalization = if (capitalizeFirst) KeyboardCapitalization.Sentences else KeyboardCapitalization.None
+        ),
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+internal fun capitalizeFirstLetter(value: String): String {
+    val firstLetterIndex = value.indexOfFirst(Char::isLetter)
+    if (firstLetterIndex < 0) return value
+    return value.replaceRange(firstLetterIndex, firstLetterIndex + 1, value[firstLetterIndex].uppercaseChar().toString())
 }
 
 @Composable
@@ -523,6 +543,17 @@ private fun SettingsScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(vertical = 20.dp)
     ) {
+        item {
+            SettingsCard("Поиск") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = vm.clearSearchAfterPrint,
+                        onCheckedChange = vm::updateClearSearchAfterPrint
+                    )
+                    Text("Очищать поисковую строку")
+                }
+            }
+        }
         item {
             SettingsCard("Загрузка базы") {
                 Text("Кого загружаем?", color = MaterialTheme.colorScheme.secondary)
@@ -815,7 +846,7 @@ private fun LabelTemplateEditor(vm: MainViewModel) {
     ConfirmDialog(
         visible = confirmReset,
         title = "Сбросить шаблон?",
-        message = "Шаблон «${kind.title}» вернётся к размеру 50 × 70 мм, одной этикетке, 203 dpi, повороту 90° и стандартным полям.",
+        message = "Шаблон «${kind.title}» вернётся к размеру 50 × 70 мм, двум этикеткам, 203 dpi, повороту 90° и стандартным полям.",
         onConfirm = {
             confirmReset = false
             val reset = vm.resetLabelTemplate(kind)
@@ -919,7 +950,7 @@ private fun LabelPreview(template: LabelTemplate, placements: List<PlacedLabelTe
                 }
                 val x = (physicalX * scale).dp
                 val y = (physicalY * scale).dp
-                val textWidth = (placed.estimatedWidthMm.coerceAtLeast(2f) * scale).dp
+                val textWidth = ((template.layoutWidthMm - placed.xMm).coerceAtLeast(2f) * scale).dp
                 val previewFont = (placed.fontSize * 25.4f / 72f * scale).coerceAtLeast(6f).sp
                 Text(
                     text = placed.text,
@@ -930,6 +961,8 @@ private fun LabelPreview(template: LabelTemplate, placements: List<PlacedLabelTe
                     textDecoration = if (placed.style == LabelFontStyle.UNDERLINE) TextDecoration.Underline else TextDecoration.None,
                     textAlign = TextAlign.Left,
                     maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
                     lineHeight = previewFont,
                     modifier = Modifier.offset(x, y).width(textWidth).graphicsLayer {
                         rotationZ = template.rotation.degrees.toFloat()
