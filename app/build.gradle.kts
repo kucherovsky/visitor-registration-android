@@ -11,8 +11,8 @@ android {
         applicationId = "ru.atol.visitorregistration"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.8.0-rc1"
+        versionCode = 18
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -29,6 +29,12 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 }
 

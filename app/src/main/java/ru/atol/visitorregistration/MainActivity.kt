@@ -198,7 +198,16 @@ private fun AppScaffold(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text(section.title) },
+                title = {
+                    Column {
+                        Text(
+                            text = "ATOL Check-in",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = AtolRed
+                        )
+                        Text(section.title, style = MaterialTheme.typography.titleLarge)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = AtolBlack,
                     titleContentColor = Color.White
@@ -233,7 +242,14 @@ private fun AppBottomNavigation(selected: AppSection, onSelect: (AppSection) -> 
 
 @Composable
 private fun AppNavigationRail(selected: AppSection, onSelect: (AppSection) -> Unit) {
-    NavigationRail(header = { Text("Регистрация", modifier = Modifier.padding(12.dp)) }) {
+    NavigationRail(header = {
+        Text(
+            "ATOL Check-in",
+            modifier = Modifier.padding(12.dp),
+            color = AtolRed,
+            style = MaterialTheme.typography.titleMedium
+        )
+    }) {
         AppSection.entries.forEach { item ->
             NavigationRailItem(
                 selected = selected == item,

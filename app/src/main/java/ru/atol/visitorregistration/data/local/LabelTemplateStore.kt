@@ -96,7 +96,8 @@ class LabelTemplateStore(context: Context) {
             heightMm = if (storedSchemaVersion < 7) 70 else
                 json.optInt("heightMm", 70).coerceIn(15, 100),
             resolution = enumOrDefault(json.optString("resolution"), PrinterResolution.DPI_203),
-            copies = json.optInt("copies", 1).coerceIn(1, 4),
+            copies = if (storedSchemaVersion < 8 && json.optInt("copies", 1) == 1) 2 else
+                json.optInt("copies", 2).coerceIn(1, 4),
             rotation = enumOrDefault(json.optString("rotation"), LabelRotation.DEG_90),
             alignment = if (needsLegacyDefaultsMigration) LabelTextAlignment.LEFT else
                 enumOrDefault(json.optString("alignment"), LabelTextAlignment.LEFT),
@@ -134,6 +135,6 @@ class LabelTemplateStore(context: Context) {
     }
 
     private companion object {
-        const val SCHEMA_VERSION = 7
+        const val SCHEMA_VERSION = 8
     }
 }

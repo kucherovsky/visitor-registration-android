@@ -6,6 +6,8 @@
 /build/
 /captures/
 /artifacts/
+/outputs/
+/branding/atol-check-in-icon-source-v2.png
 /.tools/
 .externalNativeBuild/
 .cxx/

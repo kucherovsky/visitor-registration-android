@@ -37,6 +37,7 @@ class TsplTemplateEngineTest {
             val lines = template.lines
             assertEquals(50, template.widthMm)
             assertEquals(70, template.heightMm)
+            assertEquals(2, template.copies)
             assertEquals(LabelRotation.DEG_90, template.rotation)
             assertEquals(LabelTextAlignment.LEFT, template.alignment)
             assertTrue(lines.all { it.xMm == 0f && it.style == LabelFontStyle.NORMAL })

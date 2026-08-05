@@ -107,7 +107,7 @@ data class LabelTemplate(
     val widthMm: Int = 50,
     val heightMm: Int = 70,
     val resolution: PrinterResolution = PrinterResolution.DPI_203,
-    val copies: Int = 1,
+    val copies: Int = 2,
     val rotation: LabelRotation = LabelRotation.DEG_90,
     val alignment: LabelTextAlignment = LabelTextAlignment.LEFT,
     val lines: List<LabelLineConfig> = defaultLabelLines(kind)

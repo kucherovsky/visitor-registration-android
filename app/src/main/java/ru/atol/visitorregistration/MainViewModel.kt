@@ -216,6 +216,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun checkInAndPrint(visitor: Visitor) {
         if (printerBusy) return
+        searchQuery = ""
         viewModelScope.launch {
             val checkedIn = repository.checkIn(visitor.id)
             printAfterRegistration(checkedIn, "${visitor.fullName} зарегистрирован")
